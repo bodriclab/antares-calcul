@@ -1,0 +1,67 @@
+name: antares
+on:
+  workflow_dispatch:
+    inputs:
+      etudes:
+        description: "Études à lancer (séparées par des espaces ; doivent exister dans la release inputs)"
+        default: "V1_diversification V2_concentration_nord V3_diversif_interco V4_nord_renforce V5_N1 V5_N2 V5_N2_H2 V6 V6_60"
+      test_rapide:
+        description: "Test rapide : nombre d'années MC (vide = étude complète)"
+        default: ""
+      tag:
+        description: "Tag de la release de résultats (vide = resultats-<date du jour>)"
+        default: ""
+permissions:
+  contents: write
+jobs:
+  prep:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.m.outputs.matrix }}
+      tag: ${{ steps.m.outputs.tag }}
+    steps:
+      - id: m
+        env:
+          ETUDES: ${{ inputs.etudes }}
+          TAG: ${{ inputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "matrix=$(printf '%s\n' $ETUDES | jq -R . | jq -sc .)" >> $GITHUB_OUTPUT
+          T=${TAG:-resultats-$(date -u +%Y-%m-%d)}
+          echo "tag=$T" >> $GITHUB_OUTPUT
+          gh release view "$T" -R $GITHUB_REPOSITORY >/dev/null 2>&1 || gh release create "$T" -R $GITHUB_REPOSITORY -t "$T" -n "Résultats Antares"
+  calcul:
+    needs: prep
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        etude: ${{ fromJSON(needs.prep.outputs.matrix) }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      E: ${{ matrix.etude }}
+      TAG: ${{ needs.prep.outputs.tag }}
+    steps:
+      - name: Téléchargement
+        run: |
+          cd $RUNNER_TEMP
+          gh release download inputs -R $GITHUB_REPOSITORY -p antares_solver.tgz -p "$E.tgz"
+          tar xzf antares_solver.tgz && tar xzf "$E.tgz" && rm -f *.tgz
+          df -h . ; nproc ; free -g
+      - name: Simulation
+        run: |
+          cd $RUNNER_TEMP
+          OPT=""; [ -n "${{ inputs.test_rapide }}" ] && OPT="--year=${{ inputs.test_rapide }}"
+          echo "Début de la simulation $E $OPT"
+          LD_LIBRARY_PATH=$PWD/solver ./solver/antares-8.8-solver --parallel --force-parallel=4 $OPT "$E" 2>&1 | tee solver.log | grep -aiE 'year|error|fatal|warn' | head -200 || true
+          test "${PIPESTATUS[0]}" = 0
+      - name: Envoi des résultats
+        if: always()
+        run: |
+          cd $RUNNER_TEMP
+          [ -d "$E/output" ] || { echo "pas de output"; exit 1; }
+          cp solver.log "$E/output/" || true
+          tar czf - -C "$E" output | split -b 1900M -d - "$E.output.tgz.part"
+          rm -rf "$E"
+          gh release upload "$TAG" -R $GITHUB_REPOSITORY $E.output.tgz.part* --clobber
