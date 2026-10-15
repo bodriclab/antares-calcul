@@ -54,7 +54,7 @@ jobs:
           cd $RUNNER_TEMP
           OPT=""; [ -n "${{ inputs.test_rapide }}" ] && OPT="--year=${{ inputs.test_rapide }}"
           echo "Début de la simulation $E $OPT"
-          LD_LIBRARY_PATH=$PWD/solver ./solver/antares-8.8-solver --parallel --force-parallel=4 $OPT "$E" 2>&1 | tee solver.log | grep -aiE 'year|error|fatal|warn' | head -200 || true
+          LD_LIBRARY_PATH=$PWD/solver ./solver/antares-8.8-solver --force-parallel=4 $OPT "$E" 2>&1 | tee solver.log | grep -aiE 'year|error|fatal|warn' || true
           test "${PIPESTATUS[0]}" = 0
       - name: Envoi des résultats
         if: always()
